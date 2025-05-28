@@ -15,6 +15,20 @@ COMMON_PATHS = [
     "hidden/"
 ]
 
+# Regex dictionary
+FINGERPRINT_REGEXES = {
+    "WordPress": r'wp-content|wordpress|wp-includes',
+    "Drupal": r'Drupal.settings|drupal.js',
+    "Joomla": r'Joomla|\/components\/com_|\/modules\/mod_',
+    "PHP": r'\.php',
+    "ASP.NET": r'ASP\.NET|\.aspx',
+    "nginx": r'nginx',
+    "Apache": r'Apache',
+    "Node.js": r'Node\.js|Express',
+    "BackDrop CMS": r'backdrop cms',
+    "CMS": r'cms'
+}
+
 #Fetch File Function
 def fetch_file(url, path):
     #Fetech specific file from url
@@ -70,6 +84,26 @@ def probe_endpoint(base_url, endpoint):
                 print("    ↳ Fingerprints:")
                 for fp in fingerprints:
                     print(f"        - {fp}")
+            
+            # If it's a directory
+            if full_url.endswith('/') or response.url.path.endswith('/'):
+                print("     ↳ Directory endpoint - checking for index files....")
+                index_candidates = ['index.html', 'index.php', 'default.html', 'home.html']
+                for file in index_candidates:
+                    file_url = f"{full_url.rstrip('/')}/{file}"
+                    try:
+                        index_response = httpx.get(file_url, timeout=5, follow_redirects=True)
+                        if index_response.status_code == 200:
+                            print(f"        [+] Found: {file_url} (Status: 200)")
+                            file_fingerprints = fingerprint_service(index_response)
+                            if file_fingerprints:
+                                print("         ↳ Fingerprints:")
+                                for ffp in file_fingerprints:
+                                    print(f"                - {ffp}")
+                    except Exception as e:
+                        print(f"                [!] Error checking {file_url}: {e}")
+                        
+                        
         elif response.status_code in [301, 302]:
             print(f"[+] Endpoint found - Redirect: {full_url} (Status: {response.status_code})")
         elif response.status_code in [403, 401]:
@@ -81,41 +115,56 @@ def probe_endpoint(base_url, endpoint):
         
 def fingerprint_service(response):
     fingerprints = []
+    headers = response.headers
+    
+    header_checks = [
+        'Server',
+        'X-Powered-By',
+        'X-AspNet-Version',
+        'X-AspNetMvc-Version',
+        'X-Drupal-Cache',
+        'X-Generator',
+        'X-Backend-Server',
+        'X-CDN',
+        'Via',
+        'Strict-Transport-Security',
+        'Content-Security-Policy',
+        'Set-Cookie',
+        'Link',
+        'X-Pingback',
+        'X-Runtime',
+        'X-Version'
+    ]
     
     # Headers
-    server = response.headers.get('Server')
-    if server:
-        fingerprints.append(f"Server: {server}")
-        
-    
-    powered_by = response.headers.get('X-Powered-By')
-    if powered_by:
-        fingerprints.append(f"Powered-By: {powered_by}")
-        
-    cookies = response.headers.get('Set-Cookie')
-    if cookies:
-        fingerprints.append(f"Set-Cookie: {cookies}")
-        
-    content_type = response.headers.get('Content-Type')
-    if content_type:
-        fingerprints.append(f"Content-type: {content_type}")
+    for header in header_checks:
+        value = headers.get(header)
+        if value:
+            fingerprints.append(f"{header}: {value}")
+            
+    # Cookies
+    cookies = headers.get_list('Set-Cookie')
+    for cookie in cookies:
+        if 'PHPSESSID' in cookies:
+            fingerprints.append("Cookie: PHP Sessions ID detected")
+        if 'wordpress_logged_in' in cookie:
+            fingerprints.append("Cookie: Wordpress login session detected")
+        if 'JSESSIONID' in cookie:
+            fingerprints.append("Cookie: Java session detected")
     
     
     # Body Content
     body = response.text.lower()
-    if "wordpress" in body:
-        fingerprints.append("Possible WordPress site")
-    if "drupal" in body:
-        fingerprints.append("Possible Drupal site")
-    if "cms" in body:
-        fingerprints.append("Possible CMS site")
-    if "backdrop cms" in body:
-        fingerprints.append("Possible Backdrop CMS site")
+    
+    # Regex Driven Fingerprinting
+    for name, pattern in FINGERPRINT_REGEXES.items():
+        if re.search(pattern, body, re.IGNORECASE):
+            fingerprints.append(f"Detected: {name}")
         
     # Title Tags
     title = re.search(r'<title>(.*?)<\/title>', response.text.lower(), re.IGNORECASE)
     if title:
-        fingerprints.append(f"Page Title: {title.group(1)}")
+        fingerprints.append(f"Page Title: {title.group(1).strip()}")
         
     return fingerprints
 
@@ -125,6 +174,8 @@ def main():
     parser.add_argument("--brute", action="store_true", help="Enables brute-force mode for common files")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+    
+    endpoints = []
     
     print(f"[*] Fetching robots.txt from {args.url}...")
     _, robots_content = fetch_file(args.url, "robots.txt")
@@ -145,7 +196,6 @@ def main():
             else:
                 print(f"    [-] {ep} missing or inaccessible.\n")
         
-            
     else:
         print("[-] robots.txt not found.")
     
