@@ -1,6 +1,7 @@
 import httpx
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 #Default wordlist for optional --brute
 COMMON_PATHS = [
@@ -91,9 +92,9 @@ def fingerprint_service(response):
     if powered_by:
         fingerprints.append(f"Powered-By: {powered_by}")
         
-    user_agent = response.headers.get('User-Agent')
-    if user_agent:
-        fingerprints.append(f"User-Agent: {user_agent}")
+    cookies = response.headers.get('Set-Cookie')
+    if cookies:
+        fingerprints.append(f"Set-Cookie: {cookies}")
         
     content_type = response.headers.get('Content-Type')
     if content_type:
@@ -110,6 +111,11 @@ def fingerprint_service(response):
         fingerprints.append("Possible CMS site")
     if "backdrop cms" in body:
         fingerprints.append("Possible Backdrop CMS site")
+        
+    # Title Tags
+    title = re.search(r'<title>(.*?)<\/title>', response.text.lower(), re.IGNORECASE)
+    if title:
+        fingerprints.append(f"Page Title: {title.group(1)}")
         
     return fingerprints
 
@@ -148,7 +154,7 @@ def main():
         print("[*] Probing discovered endpoints...")
         for ep in endpoints:
             probe_endpoint(args.url, ep)
-        else:
+    else:
             print("[-] No endpoints to probe.")
     
     
