@@ -2,6 +2,10 @@ import httpx
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import re
+import ssl
+import socket
+from urllib.parse import urlparse
+import hashlib
 
 #Default wordlist for optional --brute
 COMMON_PATHS = [
@@ -27,6 +31,18 @@ FINGERPRINT_REGEXES = {
     "Node.js": r'Node\.js|Express',
     "BackDrop CMS": r'backdrop cms',
     "CMS": r'cms'
+}
+
+# Error Detection Signatures Dictionary = {}
+ERROR_SIGS = {
+    "Apache": r"Apache\/[\d\.]+|Apache Server at",
+    "Nginx": r"nginx\/[\d\.]+|Welcome to nginx!",
+    "IIS": r"IIS\/[\d\.]+|Microsoft Internet Information Services",
+    "Tomcat": r"Apache Tomcat\/[\d\.]+",
+    "Cloudflare": r"cloudflare",
+    "Generic 404": r"404 Not Found|Page Not Found",
+    "Generic 403": r"403 Forbidden|Access Denied",
+    "Generic 500": r"500 Internal Server Error"
 }
 
 #Fetch File Function
@@ -106,8 +122,10 @@ def probe_endpoint(base_url, endpoint):
                         
         elif response.status_code in [301, 302]:
             print(f"[+] Endpoint found - Redirect: {full_url} (Status: {response.status_code})")
-        elif response.status_code in [403, 401]:
-            print(f"[!] Restricted: {full_url} (Status: {response.status_code})")
+        elif response.status_code in [403, 401, 404, 500]:
+            error_matches = detect_error_page(response)
+            if error_matches:
+                print(f"[!] Default error page detected: {', '.join(error_matches)}")
         else:
             print(f"[-] Not Found: {full_url} (Status: {response.status_code})")
     except httpx.RequestError as e:
@@ -168,11 +186,72 @@ def fingerprint_service(response):
         
     return fingerprints
 
+def tls_fetch(target_url):
+    parsed_url = urlparse(target_url)
+    hostname = parsed_url.hostname
+    port = 443
+    
+    
+    try:
+        context = ssl.create.default_context()
+        with socket.create_connection((hostname, port), time=5) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                cert = ssock.getpeercert(binary_form=True)
+                der_cert = ssl.DER_cert_to_PEM_cert(cert)
+                
+                # SHA-256 Fingerprint
+                sha256fp = hashlib.sha256(cert).hexdigest()
+                
+                # Parsed cert details
+                x509 = ssl._ssl._test_decode_cert(ssock.getpeercert(True))
+                
+                subject = dict(x509['subject'])
+                issuer = dict(x509['issuer'])
+                not_before = x509['notBefore']
+                not_after = x509['notAfter']
+                
+                print(f"\n[*] TLS Certificate for {hostname}:")
+                print(f"     ↳ Subject CN: {subject.get('commonName')}")
+                print(f"     ↳ Issuer CN: {issuer.get('commonName')}")
+                print(f"     ↳ Valid From: {not_before}")
+                print(f"     ↳ Valid To: {not_after}")
+                print(f"     ↳ SHA-256 Fingeprint: {sha256fp}\n")
+                
+    except Exception as e:
+        print(f"[!] Error fetching certificate from {hostname}: {e}")
+        
+def favicon_fetch(target_url):
+    favicon_url = f"{target_url.rstrip('/')}/favicon.ico"
+    try:
+        response = httpx.get(favicon_url, timeout=5, follow_redirects=True)
+        if response.status_code == 200 and response.content:
+            content = response.content
+            
+            md5_hash = hashlib.md5(content).hexdigest
+            sha256_hash = hashlib.sha256(content).hexdigest
+            
+            print(f"\n[*] Favicon found at: {favicon_url}")
+            print(f"     ↳ MD5:     {md5_hash}")
+            print(f"     ↳ SHA256:      {sha256_hash}")
+        else:
+            print(f"[-] No favicon found at {favicon_url} (Status: {response.status_code})")
+            
+    except Exception as e:
+        print(f"Error fetching favicon.ico - File does not exist or is not reachable from {favicon_url}")
+        
+def detect_error_page(response):
+    matches = []
+    body = response.text
+    for name, pattern in ERROR_SIGS.items():
+        if re.search(pattern, body, re.IGNORECASE):
+            matches.append(name)
+    return matches
+
 def main():
     parser = argparse.ArgumentParser(description="robots.txt Enumerator", add_help=True, usage="python roboenum.py --url [--brute]")
     parser.add_argument("--url", required=True, help="Target URL (e,g., https://example.com)")
     parser.add_argument("--brute", action="store_true", help="Enables brute-force mode for common files")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--wordlist", help="Path to custom wordlist file for brute-force scan")
     args = parser.parse_args()
     
     endpoints = []
@@ -199,6 +278,13 @@ def main():
     else:
         print("[-] robots.txt not found.")
     
+    # Check for TLS certs - Recon Baby Yeah
+    if args.url.startswith("https://"):
+        tls_fetch(args.url)
+        
+    # Now check for some favicon files yo
+    favicon_fetch(args.url)
+    
     #Endpoint Probing starts here.
     if endpoints:
         print("[*] Probing discovered endpoints...")
@@ -209,7 +295,18 @@ def main():
     
     
     if args.brute:
-        print("[-] Running brute-force scan for common files...")
+        custom_paths = []
+        if args.wordlist:
+            try:
+                with open(args.wordlist, 'r') as f:
+                    custom_paths = [line.strip() for line in f if line.strip()]
+                print(f"[*] Loaded {len(custom_paths)} paths from {args.wordlist}")
+            except Exception as e:
+                print(f"[!] Failed to load wordlist: {e}")
+                
+        # Combine default COMMON_PATH with any custom ones
+        wordlist_to_use = COMMON_PATHS + custom_paths
+        print("[-] Running brute-force scan with {len(wordlist_to_use)} total paths...")
         brute_force_files(args.url, COMMON_PATHS)
         
 
