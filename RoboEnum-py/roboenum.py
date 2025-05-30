@@ -6,6 +6,8 @@ import ssl
 import socket
 from urllib.parse import urlparse
 import hashlib
+from colorama import Fore, Style, init
+init(autoreset=True)
 
 #Default wordlist for optional --brute
 COMMON_PATHS = [
@@ -100,6 +102,9 @@ def probe_endpoint(base_url, endpoint):
                 print("    ↳ Fingerprints:")
                 for fp in fingerprints:
                     print(f"        - {fp}")
+                    
+            # HTTP Method Discovery 
+            discover_http_methods(full_url)
             
             # If it's a directory
             if full_url.endswith('/') or response.url.path.endswith('/'):
@@ -119,6 +124,7 @@ def probe_endpoint(base_url, endpoint):
                     except Exception as e:
                         print(f"                [!] Error checking {file_url}: {e}")
                         
+        
                         
         elif response.status_code in [301, 302]:
             print(f"[+] Endpoint found - Redirect: {full_url} (Status: {response.status_code})")
@@ -247,6 +253,29 @@ def detect_error_page(response):
             matches.append(name)
     return matches
 
+def parse_sitemap(content):
+    endpoints = []
+    loc_tags = re.findall(r'<loc>(.*?)<\/loc>', content, re.IGNORECASE)
+    for url in loc_tags:
+        path = re.sub(r'^https?:\/\/[^\/]+', '', url)
+        endpoints.append(path)
+    return endpoints
+
+def discover_http_methods(url):
+    try:
+        response = httpx.options(url, timeout=5, follow_redirects=True)
+        allow = response.headers.get("Allow")
+        if allow:
+            print(f"        ↳ Supported Methods: {allow}")
+        else:
+            print(f"       ↳ No 'Allow' header present. ")
+    except Exception as e:
+        print(f"    [!] Error performing OPTIONS on {url}: {e}")
+        
+        
+        
+        
+
 def main():
     parser = argparse.ArgumentParser(description="robots.txt Enumerator", add_help=True, usage="python roboenum.py --url [--brute]")
     parser.add_argument("--url", required=True, help="Target URL (e,g., https://example.com)")
@@ -277,6 +306,18 @@ def main():
         
     else:
         print("[-] robots.txt not found.")
+        
+    print(f"[*] Fetching sitemap.xml from {args.url}...")
+    _, sitemap_content = fetch_file(args.url, "sitemap.xml")
+    if sitemap_content:
+        print("[*] Parsing sitemap.xml...\n")
+        sitemap_endpoints = parse_sitemap(sitemap_content)
+        print("[*] Discovered entries in sitemap.xml:\n")
+        for ep in sitemap_endpoints:
+            print(f"     {ep}")
+        endpoints.extend(sitemap_endpoints)
+    else:
+        print("[-] sitemap.xml not found.")
     
     # Check for TLS certs - Recon Baby Yeah
     if args.url.startswith("https://"):
