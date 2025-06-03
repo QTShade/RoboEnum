@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: roboenum
-Version: 0.1.0
+Version: 0.1.2
 Summary: A robots.txt network enumeration and fingerprinting tool
 Home-page: https://github.com/QTShade/roboenum
 Author: QTShade

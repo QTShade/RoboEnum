@@ -40,10 +40,14 @@ RoboEnum is a modular HTTP enumeration and fingerprinting tool designed for reco
 Clone this repo and install dependencies:
 
 ```bash
-git clone https://github.com/yourgithubusername/roboenum.git
+git clone https://github.com/qtshade/roboenum.git
 cd roboenum
 pip install -r requirements.txt
 
+```
+OR
+```
+pip install roboenum
 ```
 
 ## Contributing
