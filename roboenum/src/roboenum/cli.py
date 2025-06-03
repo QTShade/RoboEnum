@@ -13,6 +13,7 @@ import sys
 import os
 import time
 import xml.etree.ElementTree as ET
+import json
 
 ansi_escape = re.compile(r'\x1B\[0-?]*[ -/]*[@-~]')
 
@@ -34,7 +35,7 @@ if not logging.getLogger("RoboEnum").hasHandlers():
     # File
     file_handler = logging.FileHandler("roboenum.log")
     file_handler.setLevel(logging.DEBUG)
-    file_formatter = NoColorFormmatter('%(asctime)s - %(levelame)s - %(message)s')
+    file_formatter = NoColorFormmatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 else:
@@ -42,7 +43,7 @@ else:
 
 # JSON Schema
 results = {
-    "target": "",
+    "target": [],
     "found_files": [],
     "discovered_endpoints": [],
     "tls_info": {},
@@ -139,11 +140,13 @@ def fetch_file(client, url, path):
         response = client.get(full_url)
         if response.status_code in [200, 301, 302]:
             print(f"{Fore.LIGHTCYAN_EX}[+] Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
+            results["found_files"].append(path)
             return (path, response.text)
         else:
             logger.warning(f"{Fore.LIGHTRED_EX}[-] Not Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
     except httpx.HTTPError as e:
         logger.error(f"{Fore.RED}[!] Error fetching {full_url}: {e}{Style.RESET_ALL}")
+        results["errors"].append(str(e))
     return (path, None)
 
 def brute_force_files(client, url, wordlist):
@@ -210,6 +213,7 @@ def probe_endpoint(client, base_url, endpoint):
                                 time.sleep(0.3)
                 except httpx.HTTPError as e:
                     logger.error(f"        {Fore.RED}[!] Error checking {file_url}: {e}{Style.RESET_ALL}")
+                    results["errors"].append(str(e))
                         
         elif response.status_code in [301, 302]:
             print_status(response.status_code, f"[+] Endpoint found - Redirect: {full_url} (Status: {response.status_code})")
@@ -222,6 +226,7 @@ def probe_endpoint(client, base_url, endpoint):
                 
     except httpx.RequestError as e:
         logger.error(f"{Fore.RED}[!] Error probing {full_url}: {e}{Style.RESET_ALL}")
+        results["errors"].append(str(e))
         
 def fingerprint_service(response):
     fingerprints = []
@@ -401,6 +406,7 @@ def shodan_favi_match(content):
             #Calc hash of b64
             hash_value = hashlib.md5(b64_content).hexdigest()
             logger.info(f"{Fore.CYAN}[+] Favicon MD5 Hash: {hash_value}{Style.RESET_ALL}")
+            results.setdefault("favicon_hashes", {}).setdefault("MD5_Shodan", []).append(hash_value)
             return hash_value
         else:
             print(f"{Fore.LIGHTYELLOW_EX}[-] Favicon content not present. Cannot hash.{Style.RESET_ALL}")
@@ -408,19 +414,59 @@ def shodan_favi_match(content):
         logger.warning(f"{Fore.RED}[!] Error hashing favicon: {e}{Style.RESET_ALL}")
         results["errors"].append(str(e))
     return None
+              
+def json_dump(results, filename):
+    if not results:
+        logger.error(f"{Fore.RED}No JSON data exists!{Style.RESET_ALL}")
+        return
     
-        
-        
-        
-        
+    results_json = json.dumps(results, indent=4)
+    
+    if not os.path.exists(filename):
+        with open(filename, 'x') as f:
+            json.dump([results], f, indent=4)
+        logger.info(f"{Fore.LIGHTGREEN_EX}JSON results saved to {filename}{Style.RESET_ALL}")
+    else:
+        while True:
+            answer = input("Log already exists. Do you want to overwrite[1] or append[2] results: ")
+            match answer:
+                case "1":
+                    with open(filename, 'w') as f:
+                        f.write(results_json)
+                        logger.info(f"{Fore.LIGHTGREEN_EX}JSON results saved to {filename}{Style.RESET_ALL}")
+                        break
+                case "2":
+                    try:
+                        with open(filename, 'r') as f:
+                            existing_data = json.load(f)
+                            
+                            if not isinstance(existing_data, list):
+                                logger.error(f"{Fore.RED}Existing JSON file is not an array, cannot safely append.{Style.RESET_ALL}")
+                                return
+                            
+                            existing_data.append(results)
+                            
+                            with open(filename, 'w') as f:
+                                json.dump(existing_data, f, indent=4)
+                                
+                            logger.info(f"{Fore.LIGHTGREEN_EX}JSON results appended to {filename}{Style.RESET_ALL}")
+                            break
+                        
+                    except json.JSONDecodeError:
+                        logger.error(f"{Fore.RED}Existing file is not valid JSON! Cannot append.{Style.RESET_ALL}")
+                        return
+                case _:
+                    logger.error(f"{Fore.RED}Invalid entry. Enter a valid option. {Style.RESET_ALL}")
+                    continue        
 
 def main():
+    print("RoboEnum starting up...")
     parser = argparse.ArgumentParser(description="robots.txt Enumerator", add_help=True, usage="python roboenum.py --url [[[--brute] [--wordlist]] [--verbose | -v]]")
     parser.add_argument("--url", required=True, help="Target URL (e,g., https://example.com)")
     parser.add_argument("--brute", action="store_true", help="Enables brute-force mode for common files")
     parser.add_argument("--wordlist", help="Path to custom wordlist file for brute-force scan")
     parser.add_argument("--verbose", "-v", action="store_true", help="Add additional detail output")
-    parser.add_argument("--json", help="Path to save output JSON report", default=None)
+    parser.add_argument("--json", metavar="FILE", help="Path to save output JSON report", default=None)
     args = parser.parse_args()
 
     endpoints = []
@@ -462,7 +508,7 @@ def main():
                 #Reach out to the endpoints discovered
             logger.info(f"{Fore.CYAN}[*] Probing discovered endpoint...{Style.RESET_ALL}")
             for ep in endpoints:
-                time.sleep(0.4)
+                time.sleep(0.25)
                 path, robots_content = fetch_file(client, args.url, ep)
                 if robots_content:
                     logger.info(f"{Fore.LIGHTGREEN_EX}    [+] {ep} exists!{Style.RESET_ALL}")
@@ -490,7 +536,7 @@ def main():
             sitemap_endpoints = parse_sitemap(sitemap_content)
             logger.info(f"{Fore.CYAN}[*] Discovered entries in sitemap.xml:\n{Style.RESET_ALL}")
             for ep in sitemap_endpoints:
-                time.sleep(0.5)
+                time.sleep(0.3)
                 logger.info(f"{Fore.LIGHTGREEN_EX}     {ep}{Style.RESET_ALL}")
             endpoints.extend(sitemap_endpoints)
             results["discovered_endpoints"].append(endpoints)
@@ -514,6 +560,12 @@ def main():
     
     # Save results to JSON Schema
     results["target"].append(args.url)
+    
+    #JSON Output
+    if args.json:
+        logger.info(f"Saving results to {args.json}")
+        json_dump(results, args.json)
+
     
     
         

@@ -1,0 +1,10 @@
+README.md
+setup.py
+src/roboenum/__init__.py
+src/roboenum/cli.py
+src/roboenum.egg-info/PKG-INFO
+src/roboenum.egg-info/SOURCES.txt
+src/roboenum.egg-info/dependency_links.txt
+src/roboenum.egg-info/entry_points.txt
+src/roboenum.egg-info/requires.txt
+src/roboenum.egg-info/top_level.txt
