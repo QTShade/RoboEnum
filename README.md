@@ -48,6 +48,8 @@ pip install -r requirements.txt
 OR
 ```
 pip install roboenum
+-On Kali Linux-
+pipx install roboenum
 ```
 
 ## Contributing
