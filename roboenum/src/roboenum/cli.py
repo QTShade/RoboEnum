@@ -21,6 +21,16 @@ class NoColorFormmatter(logging.Formatter):
     def format(self, record):
         message = super().format(record)
         return ansi_escape.sub('', message)
+    
+class NoNoiseFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        noisy_phrases = [
+            "Not Found",
+            "missing or inaccessible"
+        ]
+        return not any(phrase in message for phrase in noisy_phrases)
+    
 
 if not logging.getLogger("RoboEnum").hasHandlers():
     logger = logging.getLogger("RoboEnum")
@@ -31,6 +41,7 @@ if not logging.getLogger("RoboEnum").hasHandlers():
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(NoNoiseFilter())
     logger.addHandler(console_handler)
     # File
     file_handler = logging.FileHandler("roboenum.log")
@@ -50,7 +61,8 @@ results = {
     "favicon_hashes": {},
     "errors": [],
     "fingerprints": [],
-    "http_methods": []
+    "http_methods": [],
+    "cms_versions": []
 }
 
 init(autoreset=True)
@@ -92,6 +104,30 @@ ERROR_SIGS = {
     "Generic 403": r"403 Forbidden|Access Denied",
     "Generic 500": r"500 Internal Server Error"
 }
+
+# CMS_Version Detections Regex Dict
+CMS_VERSION_REGEXES = {
+    "WordPress": [
+        r'content="WordPress (\d+\.\d+(?:\.\d+)?)"',
+        r'wp-content\/themes\/[^\/]+\/style\.css\?ver=(\d+\.\d+(?:\.\d+)?)'
+    ],
+    "Joomla": [
+        r'content="Joomla! (\d+\.\d+(?:\.\d+)?)',
+    ],
+    "Drupal": [
+        r'content="Drupal (\d+\.\d+(?:\.\d+)?)',
+    ],
+}
+
+def detect_cms_version(content):
+    detected_versions = {}
+    
+    for cms, patterns in CMS_VERSION_REGEXES.items():
+        for pattern in patterns:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                detected_versions[cms] = match.group(1)
+    return detected_versions
 
 def get_cn(field_list):
     for sublist in field_list:
@@ -143,7 +179,7 @@ def fetch_file(client, url, path):
             results["found_files"].append(path)
             return (path, response.text)
         else:
-            logger.warning(f"{Fore.LIGHTRED_EX}[-] Not Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
+            logger.info(f"{Fore.LIGHTRED_EX}[-] Not Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
     except httpx.HTTPError as e:
         logger.error(f"{Fore.RED}[!] Error fetching {full_url}: {e}{Style.RESET_ALL}")
         results["errors"].append(str(e))
@@ -197,7 +233,7 @@ def probe_endpoint(client, base_url, endpoint):
         
         # If it's a directory
         if full_url.endswith('/') or response.url.path.endswith('/'):
-            print(f"     {Fore.LIGHTMAGENTA_EX}↳ Directory endpoint - checking for index files....{Style.RESET_ALL}")
+            print(f"                {Fore.LIGHTMAGENTA_EX}↳ Directory endpoint - checking for index files....{Style.RESET_ALL}")
             index_candidates = ['index.html', 'index.php', 'default.html', 'home.html']
             for file in index_candidates:
                 file_url = f"{full_url.rstrip('/')}/{file}"
@@ -222,7 +258,7 @@ def probe_endpoint(client, base_url, endpoint):
             if error_matches:
                 print(f"{Fore.MAGENTA}[!] Default error page detected: {', '.join(error_matches)}{Style.RESET_ALL}")
         else:
-            logger.error(f"{Fore.RED}[-] Not Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
+            logger.info(f"{Fore.RED}[-] Not Found: {full_url} (Status: {response.status_code}){Style.RESET_ALL}")
                 
     except httpx.RequestError as e:
         logger.error(f"{Fore.RED}[!] Error probing {full_url}: {e}{Style.RESET_ALL}")
@@ -275,6 +311,13 @@ def fingerprint_service(response):
     for name, pattern in FINGERPRINT_REGEXES.items():
         if re.search(pattern, body, re.IGNORECASE):
             fingerprints.append(f"Detected: {name}")
+            
+    # Regex CMS Versioning
+    cms_versions = detect_cms_version(response.text)
+    if cms_versions:
+        for cms, version in cms_versions.items():
+            logger.info(f"{Fore.LIGHTYELLOW_EX}[+] Detected {cms} version: {version} at {response.url}{Style.RESET_ALL}")
+    results["cms_versions"] = cms_versions if cms_versions else None
         
     # Title Tags
     title = re.search(r'<title>(.*?)<\/title>', response.text.lower(), re.IGNORECASE)
@@ -322,7 +365,7 @@ def tls_fetch(target_url):
                 results.setdefault("tls_info", {}).setdefault("SHA-256 Fingerprint", []).append(sha256fp)
                 
     except (socket.timeout, ConnectionRefusedError, ssl.SSLError, OSError) as e:
-        logger.warning(f"[!] Error fetching certificate from {hostname}: {e}")
+        logger.error(f"[!] Error fetching certificate from {hostname}: {e}")
         results["errors"].append(str(e))
         
 def favicon_fetch(client, target_url):
@@ -346,7 +389,7 @@ def favicon_fetch(client, target_url):
             print(f"{Fore.YELLOW}[-] No favicon found at {favicon_url} (Status: {response.status_code}){Style.RESET_ALL}")
             
     except httpx.HTTPError as e:
-        logger.warning(f"{Fore.RED}Error fetching favicon.ico {e} - File does not exist or is not reachable from {favicon_url}{Style.RESET_ALL}")
+        logger.info(f"{Fore.RED}Error fetching favicon.ico {e} - File does not exist or is not reachable from {favicon_url}{Style.RESET_ALL}")
         results["errors"].append(str(e))
     return None
         
@@ -391,9 +434,9 @@ def discover_http_methods(client, url):
                 
             print()
         else:
-            print(f"       {Fore.LIGHTBLACK_EX}↳ No 'Allow' header present. {Style.RESET_ALL}")
+            print(f"                    {Fore.LIGHTBLACK_EX}↳ No 'Allow' header present. {Style.RESET_ALL}")
     except httpx.HTTPError as e:
-        logger.warning(f"        {Fore.RED}[!] Error performing OPTIONS on {url}: {e}{Style.RESET_ALL}")
+        logger.error(f"        {Fore.RED}[!] Error performing OPTIONS on {url}: {e}{Style.RESET_ALL}")
         results["errors"].append(str(e))
         
 def shodan_favi_match(content):
@@ -411,13 +454,13 @@ def shodan_favi_match(content):
         else:
             print(f"{Fore.LIGHTYELLOW_EX}[-] Favicon content not present. Cannot hash.{Style.RESET_ALL}")
     except Exception as e:
-        logger.warning(f"{Fore.RED}[!] Error hashing favicon: {e}{Style.RESET_ALL}")
+        logger.error(f"{Fore.RED}[!] Error hashing favicon: {e}{Style.RESET_ALL}")
         results["errors"].append(str(e))
     return None
               
 def json_dump(results, filename):
     if not results:
-        logger.error(f"{Fore.RED}No JSON data exists!{Style.RESET_ALL}")
+        logger.info(f"{Fore.RED}No JSON data exists!{Style.RESET_ALL}")
         return
     
     results_json = json.dumps(results, indent=4)
@@ -441,7 +484,7 @@ def json_dump(results, filename):
                             existing_data = json.load(f)
                             
                             if not isinstance(existing_data, list):
-                                logger.error(f"{Fore.RED}Existing JSON file is not an array, cannot safely append.{Style.RESET_ALL}")
+                                logger.info(f"{Fore.RED}Existing JSON file is not an array, cannot safely append.{Style.RESET_ALL}")
                                 return
                             
                             existing_data.append(results)
@@ -453,10 +496,10 @@ def json_dump(results, filename):
                             break
                         
                     except json.JSONDecodeError:
-                        logger.error(f"{Fore.RED}Existing file is not valid JSON! Cannot append.{Style.RESET_ALL}")
+                        logger.info(f"{Fore.RED}Existing file is not valid JSON! Cannot append.{Style.RESET_ALL}")
                         return
                 case _:
-                    logger.error(f"{Fore.RED}Invalid entry. Enter a valid option. {Style.RESET_ALL}")
+                    logger.info(f"{Fore.RED}Invalid entry. Enter a valid option. {Style.RESET_ALL}")
                     continue        
 
 def main():
@@ -487,7 +530,7 @@ def main():
                         custom_paths = [line.strip() for line in f if line.strip()]
                     logger.info(f"{Fore.WHITE}[*] Loaded {len(custom_paths)} paths from {args.wordlist}{Style.RESET_ALL}")
                 except Exception as e:
-                    logger.warning(f"{Fore.RED}[!] Failed to load wordlist: {e}{Style.RESET_ALL}")
+                    logger.error(f"{Fore.RED}[!] Failed to load wordlist: {e}{Style.RESET_ALL}")
                 
             # Combine default COMMON_PATH with any custom ones
             wordlist_to_use = COMMON_PATHS + custom_paths
@@ -513,10 +556,10 @@ def main():
                 if robots_content:
                     logger.info(f"{Fore.LIGHTGREEN_EX}    [+] {ep} exists!{Style.RESET_ALL}")
                 else:
-                    logger.warning(f"{Fore.RED}    [-] {ep} missing or inaccessible.{Style.RESET_ALL}")
+                    logger.info(f"{Fore.RED}    [-] {ep} missing or inaccessible.{Style.RESET_ALL}")
             
         else:
-            logger.error(f"{Fore.RED}[-] robots.txt not found.{Style.RESET_ALL}")
+            logger.info(f"{Fore.RED}[-] robots.txt not found.{Style.RESET_ALL}")
             
         # Fetch favicon and conduct shodan-compatiable hashing
         favicon_bytes = favicon_fetch(client, args.url)
@@ -541,7 +584,7 @@ def main():
             endpoints.extend(sitemap_endpoints)
             results["discovered_endpoints"].append(endpoints)
         else:
-            logger.warning("[-] sitemap.xml not found.")
+            logger.info("[-] sitemap.xml not found.")
         
         # Check for TLS certs - Recon Baby Yeah
         if args.url.startswith("https://"):
@@ -556,7 +599,7 @@ def main():
                 probe_endpoint(client, args.url, ep)
                 time.sleep(0.4)
         else:
-                logger.warning(f"{Fore.MAGENTA}[-] No endpoints to probe.{Style.RESET_ALL}")
+                logger.info(f"{Fore.RED}[-] No endpoints to probe.{Style.RESET_ALL}")
     
     # Save results to JSON Schema
     results["target"].append(args.url)

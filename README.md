@@ -19,19 +19,23 @@ RoboEnum is a modular HTTP enumeration and fingerprinting tool designed for reco
 
 - Basic Usage
     ```
-    python roboenum.py --url http[s]://example.com
+    roboenum --url http[s]://example.com
     ```
 - Save Output to JSON
     ```
-    python roboenum.py --url http[s]://example.com --json
+    roboenum --url http[s]://example.com --json
     ```
 - Brute Force Enum
     ```
-    python roboenum.py --url http[s]://example.com --brute [--wordlist]
+    roboenum --url http[s]://example.com --brute [--wordlist]
     ```
 - Verbose mode
     ```
-    python roboenum.py --url http[s]://example.com --verbose | -v
+    roboenum --url http[s]://example.com --verbose | -v
+    ```
+- Help Page
+    ```
+    roboenum --help | -h
     ```
 
 
@@ -48,6 +52,8 @@ pip install -r requirements.txt
 OR
 ```
 pip install roboenum
+```
+```
 -On Kali Linux-
 pipx install roboenum
 ```

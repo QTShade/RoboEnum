@@ -53,6 +53,10 @@ OR
 ```
 pip install roboenum
 ```
+```
+-On Kali Linux-
+pipx install roboenum
+```
 
 ## Contributing
 Contributions are welcome! Please follow these guidelines:
