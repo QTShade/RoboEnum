@@ -58,6 +58,17 @@ pip install roboenum
 pipx install roboenum
 ```
 
+### Distributions
+
+#### NixOS/Nixpkgs
+
+For Nix or NixOS users is a package available. Keep in mind that the lastest releases might only
+be present in the `unstable` channel.
+
+```bash
+nix-shell -p roboenum
+```
+
 ## Contributing
 Contributions are welcome! Please follow these guidelines:
 
